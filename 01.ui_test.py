@@ -1,123 +1,219 @@
+import os
 import streamlit as st
-import plotly.express as px
+from openai import AzureOpenAI
 import pandas as pd
+import plotly.express as px
 
-# 페이지 설정
-st.set_page_config(page_title="유선상품 BS 서비스 대시보드", layout="wide")
+# 환경변수 (실제 배포 시 .env 파일 사용 권장)
+OPENAI_ENDPOINT = "https://yb0617azureopenai002.openai.azure.com/"
+OPENAI_API_KEY = "4WPNYNq47zPD34wfdSfZmS1tQZDtHRWIurmUqWqG2CQ5KBZZp9MPJQQJ99BFAC4f1cMXJ3w3AAABACOGn0g7"
+CHAT_MODEL = "dev-gpt-4o-mini"
+EMBEDDING_MODEL = "dev-text-embedding-3-small"
+SEARCH_ENDPOINT = "https://yb0617-aisearch002.search.windows.net"
+SEARCH_API_KEY = "UGC9S7WgKEieHSSr4F5KBVnrtqQYc7yIsf8hY73OYnAzSeB7HDKX"
+INDEX_NAME = "rag-index"
 
-# 세션 상태 초기화
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "안녕하세요! 유선상품 BS 서비스 대시보드입니다. 사이드바에서 단계를 클릭하거나 채팅으로 문의해 주세요."}
-    ]
-if "chat_prompt" not in st.session_state:
-    st.session_state.chat_prompt = "문의 입력..."  # Default placeholder
+# 매핑 변수
+open_ai_endpoint = OPENAI_ENDPOINT
+open_ai_key = OPENAI_API_KEY
+chat_model = CHAT_MODEL
+embedding_model = EMBEDDING_MODEL
+search_url = SEARCH_ENDPOINT
+search_key = SEARCH_API_KEY
+index_name = INDEX_NAME
 
-# 사이드바: 마크다운 + 버튼으로 플로우 구현
-st.sidebar.markdown("""
+# Azure OpenAI 클라이언트 초기화
+chat_client = AzureOpenAI(
+    api_version="2024-12-01-preview",
+    azure_endpoint=open_ai_endpoint,
+    api_key=open_ai_key
+)
+
+# KT 브랜드 색상 적용 (CSS)
+st.markdown("""
     <style>
+        /* 전체 바탕색 및 글씨 색상 */
+        .stApp {
+            background-color: #000000;
+            color: #FFFFFF;
+        }
+        /* 사이드바 스타일 */
+        .css-1d391kg {  /* 사이드바 클래스 */
+            background-color: #333333;
+            color: #FFFFFF;
+        }
         .sidebar-title {
             font-size: 24px;
             font-weight: bold;
-            color: #2c3e50;
+            color: #DA1E28;  /* KT Red */
             margin-bottom: 20px;
             text-align: center;
         }
         .step-box {
-            background-color: #f0f4f8;
+            background-color: #666666;  /* KT Gray */
             border-radius: 10px;
             padding: 10px;
             margin-bottom: 10px;
             font-size: 16px;
+            color: #FFFFFF;
         }
         .emoji {
             font-size: 20px;
             margin-right: 10px;
         }
         .step-title {
-            color: #34495e;
+            color: #FFFFFF;
             font-weight: bold;
         }
         .stButton>button {
             width: 100%;
-            background-color: #005BAC;
-            color: white;
+            background-color: #DA1E28;  /* KT Red */
+            color: #FFFFFF;
             border-radius: 5px;
             margin-top: 5px;
+            border: none;
         }
         .stButton>button:hover {
-            background-color: #003087;
+            background-color: #A8181F;  /* Darker KT Red */
+        }
+        /* 채팅 UI 스타일 */
+        .stChatMessage {
+            background-color: #FFFFFF;  /* White bubbles */
+            color: #000000;  /* Black text */
+            border-radius: 10px;
+        }
+        .stTextInput input {
+            background-color: #333333;
+            color: #FFFFFF;
+            border: 1px solid #DA1E28;  /* KT Red border */
+        }
+        .stTextInput input::placeholder {
+            color: #999999;  /* Lighter gray placeholder */
+        }
+        /* 메트릭 스타일 */
+        .stMetric {
+            background-color: #000000;
+            color: #FFFFFF;
+            border: 1px solid #DA1E28;  /* KT Red border */
+        }
+        /* 제목 및 텍스트 */
+        h1, h2, h3, p, div {
+            color: #FFFFFF;
         }
     </style>
-
-    <div class="sidebar-title">유선상품 BS 서비스 플로우</div>
 """, unsafe_allow_html=True)
 
-# 단계 정의
-steps = [
-    {"emoji": "📋", "title": "1. 사전점검", "desc": "환경 및 회선 확인 후 보고서 작성", "prompt": "사전점검은 어떻게 진행되나요?"},
-    {"emoji": "🔍", "title": "2. 품질점검", "desc": "현장/원격 진단으로 문제 해결", "prompt": "인터넷 속도 문제를 점검해 주세요"},
-    {"emoji": "📞", "title": "3. 고객 문의", "desc": "상담원 연결, 문제 기록/해결", "prompt": "고객 지원 센터에 문의하려면 어떻게 해야 하나요?"},
-    {"emoji": "📝", "title": "4. 영업안내", "desc": "상품 제안, 계약, 사후 관리", "prompt": "요금제와 상품을 안내해 주세요"}
-]
+# Streamlit 앱 기본 설정
+st.title("KT 유선상품 고객 BS(Before Service) 분석 및 영업지원 에이전트")
 
-# 사이드바 단계 및 버튼
-for step in steps:
-    st.sidebar.markdown(f"""
-        <div class="step-box">
-            <span class="emoji">{step['emoji']}</span>
-            <span class="step-title">{step['title']}</span><br>
-            {step['desc']}
-        </div>
+# 초기 채팅 히스토리 설정
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "system", "content": "당신은 KT 유선상품 고객의 사전점검 BS 대상 분석 및 영업지원 에이전트입니다."}
+    ]
+
+def get_openai_response(messages):
+    """
+    OpenAI API를 호출하여 응답 메시지를 반환합니다.
+    """
+    rag_params = {
+        "data_sources": [
+            {
+                "type": "azure_search",
+                "parameters": {
+                    "endpoint": search_url,
+                    "index_name": index_name,
+                    "authentication": {
+                        "type": "api_key",
+                        "key": search_key,
+                    },
+                    "query_type": "vector",
+                    "embedding_dependency": {
+                        "type": "deployment_name",
+                        "deployment_name": embedding_model,
+                    },
+                }
+            }
+        ],
+    }
+    response = chat_client.chat.completions.create(
+        model=chat_model,
+        messages=messages,
+        extra_body=rag_params
+    )
+    return response.choices[0].message.content
+
+def _handle_precheck(precheck_input, label):
+    """
+    공통 precheck 로직: precheck_input 메시지를 채팅 히스토리에 추가하고 OpenAI 응답 호출
+    """
+    try:
+        if precheck_input.strip() == "_":
+            st.warning("입력값이 비어 있습니다. 내용을 선택해주세요.")
+            return
+        st.session_state.messages.append({"role": "user", "content": precheck_input})
+        with st.spinner(f"{label} 응답을 기다리는 중..."):
+            assistant_response = get_openai_response(st.session_state.messages)
+        st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+        st.chat_message("assistant").write(assistant_response)
+    except Exception as e:
+        st.error(f"{label} 실패: {e}")
+
+def render_menu():
+    """
+    사이드바 메뉴 영역: st.sidebar.markdown과 버튼으로 옵션 표시
+    """
+    st.sidebar.image("./images/logo_kt.png", width=150)  # KT 로고 (실제 로고 파일로 교체 권장)
+    st.sidebar.markdown("""
+        <div class="sidebar-title">KT 유선상품 BS 메뉴</div>
     """, unsafe_allow_html=True)
-    if st.sidebar.button(f"문의: {step['title']}", key=step['title']):
-        # 클릭 시 프롬프트 직접 메시지에 추가 및 placeholder 업데이트
-        prompt = step['prompt']
-        st.session_state.chat_prompt = prompt
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # 챗봇 응답 생성
-        response = "문의를 처리 중입니다. 잠시만 기다려 주세요."
-        if "사전점검" in prompt:
-            response = "사전점검은 서비스 설치 전 회선 상태와 환경을 확인하는 과정입니다. 기술자가 방문해 보고서를 작성합니다."
-        elif "품질점검" in prompt or "인터넷 속도" in prompt:
-            response = "인터넷 속도 문제ですね? 품질점검 팀이 현장/원격 진단을 진행합니다. 예약을 원하시면 주소를 알려주세요!"
-        elif "고객 문의" in prompt or "고객 지원" in prompt:
-            response = "고객 문의는 24/7 상담원 연결 또는 온라인 포털로 접수 가능합니다. 문의 유형을 알려주세요!"
-        elif "요금제" in prompt or "영업안내" in prompt:
-            response = "요금제 문의 감사합니다! 제공 상품: [500Mbps 인터넷, IPTV 결합]. 계약 상담을 진행할까요?"
-        
-        st.session_state.messages.append({"role": "assistant", "content": response})
 
-# 메인 페이지: 대시보드
-st.title("유선상품 BS 서비스 대시보드")
+    options = [
+        {"title": "BS분석", "desc": "동 그룹별 사전점검 대상 현황", "prompt": "주소의 동 그룹으로 사전점검 대상 현황 count를 표로 정리해줘"},
+        {"title": "인터넷 품질점검", "desc": "인터넷 품질점검 체크리스트", "prompt": "인터넷 품질점검 체크리스트 알려줘"},
+        {"title": "TV 품질점검", "desc": "TV 품질점검 체크리스트", "prompt": "TV 품질점검 체크리스트 알려줘"},
+        {"title": "VOIP 품질점검", "desc": "VOIP 품질점검 체크리스트", "prompt": "VOIP 품질점검 체크리스트 알려줘"},
+        {"title": "PSTN 품질점검", "desc": "PSTN 품질점검 체크리스트", "prompt": "PSTN 품질점검 체크리스트 알려줘"},
+        {"title": "인터넷 영업멘트", "desc": "인터넷 상품 영업 멘트", "prompt": "인터넷 영업멘트 알려줘"},
+        {"title": "TV 영업멘트", "desc": "TV 상품 영업 멘트", "prompt": "TV 영업멘트 알려줘"},
+        {"title": "VOIP 영업멘트", "desc": "VOIP 상품 영업 멘트", "prompt": "VOIP 영업멘트 알려줘"},
+        {"title": "PSTN 영업멘트", "desc": "PSTN 상품 영업 멘트", "prompt": "PSTN 영업멘트 알려줘"},
+        {"title": "영업 팁", "desc": "효과적인 영업 팁", "prompt": "영업 팁 알려줘"}
+    ]
+
+    for option in options:
+        st.sidebar.markdown(f"""
+            <div class="step-box">
+                <span class="step-title">{option['title']}</span><br>
+                {option['desc']}
+            </div>
+        """, unsafe_allow_html=True)
+        if st.sidebar.button(f"선택: {option['title']}", key=option['title']):
+            _handle_precheck(option['prompt'], option['title'])
+
+def render_chat_area():
+    """
+    메인 페이지 채팅 영역: 기존 채팅 히스토리와 사용자 입력 처리
+    """
+    # 채팅 UI
+    for message in st.session_state.messages:
+        if message["role"] != "system":  # 시스템 메시지 제외
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+    if user_input := st.chat_input("메시지를 입력하세요"):
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        st.chat_message("user").write(user_input)
+        with st.spinner("응답을 기다리는 중..."):
+            assistant_response = get_openai_response(st.session_state.messages)
+        st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+        st.chat_message("assistant").write(assistant_response)
 
 
-# 채팅 UI
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
 
-# 채팅 입력창 (단일 placeholder 사용)
-prompt = st.chat_input(st.session_state.chat_prompt)
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+def main():
+    render_chat_area()
+    render_menu()
 
-    # 챗봇 응답
-    response = "문의를 처리 중입니다. 잠시만 기다려 주세요."
-    if "사전점검" in prompt:
-        response = "사전점검은 서비스 설치 전 회선 상태와 환경을 확인하는 과정입니다. 기술자가 방문해 보고서를 작성합니다."
-    elif "품질점검" in prompt or "인터넷 속도" in prompt:
-        response = "인터넷 속도 문제 품질점검 팀이 현장/원격 진단을 진행합니다. 예약을 원하시면 주소를 알려주세요!"
-    elif "고객 문의" in prompt or "고객 지원" in prompt:
-        response = "고객 문의는 24/7 상담원 연결 또는 온라인 포털로 접수 가능합니다. 문의 유형을 알려주세요!"
-    elif "요금제" in prompt or "영업안내" in prompt:
-        response = "요금제 문의 감사합니다! 제공 상품: [500Mbps 인터넷, IPTV 결합]. 계약 상담을 진행할까요?"
-
-    st.session_state.messages.append({"role": "assistant", "content": response})
-    with st.chat_message("assistant"):
-        st.markdown(response)
-    st.session_state.chat_prompt = "문의 입력..."  # 입력 후 placeholder 초기화
-
+if __name__ == "__main__":
+    main()
