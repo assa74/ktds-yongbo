@@ -22,3 +22,6 @@
     - Streamlit을 활용한 UI/UX 구성
       . chatbot 창에 BS분석, 인터넷 품질점검 사항, TV 품질점검 사항, VOIP 품질점검 사항, PSTN 품질점검 사항 등 버튼 생성
       . 메세지 히스토리 관리
+# MVP과제 제출 자료
+  * 과제 문서 : 📘 Azure 기반 생성형 AI MVP프로젝트 제안서-유선상품 BS 영업 지원.docx
+  * 영상 : ktds-yongbo_REC.mp4
